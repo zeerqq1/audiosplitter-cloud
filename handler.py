@@ -66,6 +66,7 @@ def handler(job):
             language,
             model_size=model_size,
             device_pref="auto",
+            batch_size=32,  # RTX 4090 has plenty of VRAM headroom vs the default of 16
             progress=progress,
             pct=pct,
         )
