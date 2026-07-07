@@ -21,6 +21,8 @@ import re
 import gc
 import difflib
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
@@ -486,9 +488,11 @@ def cut_audio(
     ffmpeg = _ffmpeg_exe()
     n = len(cuts) - 1
     width = max(3, len(str(n)))
-    outputs: List[str] = []
+    outputs: List[Optional[str]] = [None] * n
+    done = 0
+    lock = threading.Lock()
 
-    for i in range(n):
+    def _cut_one(i: int) -> str:
         start = cuts[i]
         dur = cuts[i + 1] - cuts[i]
         out = os.path.join(output_dir, f"{i + 1:0{width}d}{ext}")
@@ -510,9 +514,22 @@ def cut_audio(
                 raise RuntimeError(
                     f"ffmpeg не смог вырезать сегмент {i + 1}:\n{proc.stderr}\n{proc2.stderr}"
                 )
-        outputs.append(out)
-        progress(f"Сохранён {i + 1}/{n}: {os.path.basename(out)}")
-        pct(80 + int(20 * (i + 1) / n))
+        return out
+
+    # Cutting each segment is an independent, read-only slice of the same
+    # source file -> safe to run several ffmpeg processes concurrently.
+    # This does not change WHERE cuts happen, only how fast they are written.
+    max_workers = min(8, max(1, (os.cpu_count() or 4)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_cut_one, i): i for i in range(n)}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            out = fut.result()
+            outputs[i] = out
+            with lock:
+                done += 1
+                progress(f"Сохранён {done}/{n}: {os.path.basename(out)}")
+                pct(80 + int(20 * done / n))
 
     return outputs
 

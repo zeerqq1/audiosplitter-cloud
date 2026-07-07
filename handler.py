@@ -16,6 +16,8 @@ Expected job input (all paths are RELATIVE to the network volume root):
 }
 """
 import os
+import shutil
+import tempfile
 import traceback
 
 import runpod
@@ -57,25 +59,47 @@ def handler(job):
     def pct(_p):
         pass
 
-    pairs = [(name, audio_path, text_path)]
+    # Stage the source audio/text on the worker's LOCAL disk instead of
+    # reading/writing every single cut directly on the Network Volume.
+    # Network Volume I/O has real per-file latency; local disk does not.
+    # This changes ONLY where bytes are read/written, not the cut points,
+    # alignment, or any other logic -> results are identical.
+    with tempfile.TemporaryDirectory(prefix="job_") as tmp:
+        local_in = os.path.join(tmp, "input")
+        local_out = os.path.join(tmp, "output")
+        os.makedirs(local_in, exist_ok=True)
+        os.makedirs(local_out, exist_ok=True)
 
-    try:
-        batch = splitter.run_batch(
-            pairs,
-            out_dir,
-            language,
-            model_size=model_size,
-            device_pref="auto",
-            batch_size=32,  # RTX 4090 has plenty of VRAM headroom vs the default of 16
-            progress=progress,
-            pct=pct,
-        )
-    except Exception:
-        return {
-            "error": "run_batch failed",
-            "traceback": traceback.format_exc(),
-            "log": log_lines[-100:],
-        }
+        local_audio = os.path.join(local_in, os.path.basename(audio_path))
+        local_text = os.path.join(local_in, os.path.basename(text_path))
+        progress("Копирую входные файлы на локальный диск воркера…")
+        shutil.copyfile(audio_path, local_audio)
+        shutil.copyfile(text_path, local_text)
+
+        pairs = [(name, local_audio, local_text)]
+
+        try:
+            batch = splitter.run_batch(
+                pairs,
+                local_out,
+                language,
+                model_size=model_size,
+                device_pref="auto",
+                batch_size=32,  # RTX 4090 has plenty of VRAM headroom vs the default of 16
+                progress=progress,
+                pct=pct,
+            )
+        except Exception:
+            return {
+                "error": "run_batch failed",
+                "traceback": traceback.format_exc(),
+                "log": log_lines[-100:],
+            }
+
+        progress("Копирую готовые клипы на Network Volume…")
+        # run_batch writes into local_out/<pair_name>/... -> copy that whole
+        # tree onto the volume's out_dir, preserving the same subfolder layout.
+        shutil.copytree(local_out, out_dir, dirs_exist_ok=True)
 
     pair_result = batch.pairs[0] if batch.pairs else None
     ok = bool(pair_result and pair_result.ok)
