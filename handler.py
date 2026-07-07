@@ -49,13 +49,16 @@ def handler(job):
     os.makedirs(out_dir, exist_ok=True)
 
     log_lines = []
+    last_pct = {"v": -1}
 
     def progress(msg):
         log_lines.append(msg)
         print(msg, flush=True)
+        runpod.serverless.progress_update(job, {"pct": last_pct["v"], "log": msg})
 
-    def pct(_p):
-        pass
+    def pct(p):
+        last_pct["v"] = p
+        runpod.serverless.progress_update(job, {"pct": p, "log": log_lines[-1] if log_lines else ""})
 
     pairs = [(name, audio_path, text_path)]
 
