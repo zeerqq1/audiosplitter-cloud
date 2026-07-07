@@ -25,10 +25,32 @@ import runpod
 import splitter
 
 VOLUME_ROOT = os.environ.get("RUNPOD_VOLUME_ROOT", "/runpod-volume")
+MIN_FREE_GB = 15  # below this, clear model caches before starting the job
 
 
 def _abs(rel_path: str) -> str:
     return os.path.join(VOLUME_ROOT, rel_path)
+
+
+def _free_gb(path: str = "/") -> float:
+    return shutil.disk_usage(path).free / (1024 ** 3)
+
+
+def _ensure_disk_space(progress) -> None:
+    """RunPod keeps workers warm between jobs, so HuggingFace/torch model
+    caches accumulate across jobs (each language downloads its own
+    alignment checkpoint) and can eventually fill the container disk,
+    causing the cutting step to fail with 'No space left on device'.
+    If we're getting low, wipe the caches so the job has room to run —
+    worth an extra model re-download over a guaranteed failure."""
+    free = _free_gb()
+    if free >= MIN_FREE_GB:
+        return
+    progress(f"Свободно {free:.1f}GB на диске воркера — чищу кэш моделей…")
+    for cache_dir in (os.path.expanduser("~/.cache/huggingface"),
+                       os.path.expanduser("~/.cache/torch")):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    progress(f"После очистки свободно: {_free_gb():.1f}GB")
 
 
 def handler(job):
@@ -58,6 +80,8 @@ def handler(job):
 
     def pct(_p):
         pass
+
+    _ensure_disk_space(progress)
 
     # Stage the source audio/text on the worker's LOCAL disk instead of
     # reading/writing every single cut directly on the Network Volume.
