@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch
+torchaudio
+
+runpod>=1.7.0
+imageio-ffmpeg>=0.5.1
+
+# Same alignment/transcription engine as the local AudioSplitter EXE.
+# NOTE: unlike the local install.bat, we do NOT need the special CUDA 12.8
+# (Blackwell) wheel index here — the cloud GPUs (RTX 4090 / A100 / A5000 / L4)
+# are Ada/Ampere, fully supported by the standard cu124 wheels above.
+whisperx>=3.3.0
